@@ -13,48 +13,80 @@ class CallHandler {
   }
 
   async initializeElevenLabs() {
-    try {
-      // Get signed URL from ElevenLabs
-      const response = await fetch(
-        `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${Deno.env.get("ELEVENLABS_AGENT_ID")}`,
-        {
-          headers: {
-            "xi-api-key": Deno.env.get("ELEVENLABS_API_KEY"),
-          },
-        }
-      );
-      const data = await response.json();
-      
-      this.elevenlabsWs = new WebSocket(data.signed_url);
-      
-      this.elevenlabsWs.onopen = () => {
-        console.log("ElevenLabs WebSocket connected");
-      };
-
-      this.elevenlabsWs.onmessage = async (event) => {
-        const message = JSON.parse(event.data);
-        await this.handleElevenLabsMessage(message);
-      };
-
-      this.elevenlabsWs.onclose = () => {
-        console.log("ElevenLabs connection closed");
-        this.cleanup();
-      };
-    } catch (error) {
-      console.error("Error connecting to ElevenLabs:", error);
-      this.cleanup();
+  try {
+    // Get signed URL from ElevenLabs
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${Deno.env.get("ELEVENLABS_AGENT_ID")}`,
+      {
+        headers: {
+          "xi-api-key": Deno.env.get("ELEVENLABS_API_KEY"),
+        },
+      }
+    );
+    const data = await response.json();
+    
+    if (!data.signed_url) {
+      throw new Error("Failed to get signed URL from ElevenLabs");
     }
+    
+    this.elevenlabsWs = new WebSocket(data.signed_url);
+    
+    this.elevenlabsWs.onopen = () => {
+      console.log("ElevenLabs WebSocket connected");
+    };
+
+    this.elevenlabsWs.onerror = (error) => {
+      console.error("ElevenLabs WebSocket error:", error);
+    };
+
+    this.elevenlabsWs.onmessage = async (event) => {
+      const message = JSON.parse(event.data);
+      console.log("Received message from ElevenLabs:", message.type); // Add logging
+      
+      switch (message.type) {
+        case "conversation_initiation_metadata":
+          console.log("Conversation initiated:", message.conversation_initiation_metadata_event);
+          break;
+          
+        case "ping":
+          this.elevenlabsWs?.send(JSON.stringify({
+            type: "pong",
+            event_id: message.ping_event.event_id,
+          }));
+          break;
+          
+        default:
+          await this.handleElevenLabsMessage(message);
+      }
+    };
+
+    this.elevenlabsWs.onclose = (event) => {
+      console.log("ElevenLabs connection closed:", event.code, event.reason);
+      this.cleanup();
+    };
+  } catch (error) {
+    console.error("Error connecting to ElevenLabs:", error);
+    this.cleanup();
   }
+}
 
   async handleElevenLabsMessage(message: any) {
     if (!this.isActive) return;
 
     switch (message.type) {
       case "audio":
+        // Verify input format (16kHz)
+        if (!verifyAudioFormat(message.audio_event.audio_base_64, 16000)) {
+          console.warn("Incoming audio from ElevenLabs doesn't match expected 16kHz format");
+        }
         // Convert 16kHz PCM to 8kHz PCM for Exotel
         const convertedAudio = await this.convertAudioForExotel(
           message.audio_event.audio_base_64
         );
+        // Verify output format (8kHz)
+        if (!verifyAudioFormat(convertedAudio, 8000)) {
+          console.warn("Converted audio doesn't match Exotel 8kHz format");
+        }
         
         // Send to Exotel in chunks of appropriate size
         const chunks = this.chunkAudio(convertedAudio, 32000); // 32kb chunks
@@ -111,18 +143,35 @@ class CallHandler {
         break;
 
       case "media":
-        if (this.elevenlabsWs?.readyState === WebSocket.OPEN) {
-          // Convert 8kHz PCM to 16kHz PCM for ElevenLabs
-          const convertedAudio = await this.convertAudioForElevenLabs(
-            message.media.payload
-          );
-          
-          // Send to ElevenLabs
-          this.elevenlabsWs.send(JSON.stringify({
-            user_audio_chunk: convertedAudio,
-          }));
-        }
-        break;
+  if (this.elevenlabsWs?.readyState === WebSocket.OPEN) {
+    try {
+      // Verify input format (8kHz)
+          if (!verifyAudioFormat(message.media.payload, 8000)) {
+            console.warn("Incoming audio from Exotel doesn't match expected 8kHz format");
+          }
+      // Convert 8kHz PCM to 16kHz PCM for ElevenLabs
+      const convertedAudio = await this.convertAudioForElevenLabs(
+        message.media.payload
+      );
+
+      // Verify output format (16kHz)
+          if (!verifyAudioFormat(convertedAudio, 16000)) {
+            console.warn("Converted audio doesn't match ElevenLabs 16kHz format");
+          }
+      
+      // Send to ElevenLabs
+      const payload = {
+        user_audio_chunk: convertedAudio
+      };
+      console.log("Sending audio to ElevenLabs");
+      this.elevenlabsWs.send(JSON.stringify(payload));
+    } catch (error) {
+      console.error("Error processing audio:", error);
+    }
+  } else {
+    console.error("ElevenLabs WebSocket not ready:", this.elevenlabsWs?.readyState);
+  }
+  break;
 
       case "stop":
         console.log("Stream ended:", this.streamSid);
@@ -153,44 +202,89 @@ async convertAudioForElevenLabs(audioBase64: string): Promise<string> {
     // Calculate intermediate sample
     outputBuffer[i * 2 + 1] = Math.round((inputBuffer[i] + inputBuffer[i + 1]) / 2);
   }
-  // Handle last sample
-  outputBuffer[outputBuffer.length - 2] = inputBuffer[inputBuffer.length - 1];
-  outputBuffer[outputBuffer.length - 1] = inputBuffer[inputBuffer.length - 1];
+  // Handle the last sample
+    const lastIndex = inputBuffer.length - 1;
+    outputBuffer[lastIndex * 2] = inputBuffer[lastIndex];
+    outputBuffer[lastIndex * 2 + 1] = inputBuffer[lastIndex];
 
-  // Convert back to base64
-  const outputArray = new Uint8Array(outputBuffer.buffer);
-  let binaryString = "";
-  for (let i = 0; i < outputArray.length; i++) {
-    binaryString += String.fromCharCode(outputArray[i]);
+    // Convert to Uint8Array for base64 encoding
+    const outputBytes = new Uint8Array(outputBuffer.buffer);
+    
+    // Convert to base64
+    let binary = '';
+    for (let i = 0; i < outputBytes.length; i++) {
+      binary += String.fromCharCode(outputBytes[i]);
+    }
+    
+    return btoa(binary);
+  } catch (error) {
+    console.error("Error in convertAudioForElevenLabs:", error);
+    throw error;
   }
-  return btoa(binaryString);
 }
 
 async convertAudioForExotel(audioBase64: string): Promise<string> {
-  // Decode base64 to buffer
-  const binaryData = atob(audioBase64);
-  const inputBuffer = new Int16Array(binaryData.length / 2);
-  
-  // Convert binary string to Int16Array
-  for (let i = 0; i < binaryData.length; i += 2) {
-    inputBuffer[i/2] = (binaryData.charCodeAt(i) | (binaryData.charCodeAt(i + 1) << 8));
-  }
+  try {
+    // Decode base64 to buffer
+    const binaryData = atob(audioBase64);
+    const inputBuffer = new Int16Array(binaryData.length / 2);
+    
+    // Convert binary string to Int16Array (16kHz PCM)
+    for (let i = 0; i < binaryData.length; i += 2) {
+      inputBuffer[i/2] = (binaryData.charCodeAt(i) | (binaryData.charCodeAt(i + 1) << 8));
+    }
 
-  // Create output buffer (half the size for downsampling)
-  const outputBuffer = new Int16Array(Math.floor(inputBuffer.length / 2));
-  
-  // Average pairs of samples for downsampling
-  for (let i = 0; i < outputBuffer.length; i++) {
-    outputBuffer[i] = Math.round((inputBuffer[i * 2] + inputBuffer[i * 2 + 1]) / 2);
-  }
+    // Create output buffer for 8kHz (half size for downsampling)
+    const outputBuffer = new Int16Array(Math.ceil(inputBuffer.length / 2));
+    
+    // Average every two samples for downsampling from 16kHz to 8kHz
+    for (let i = 0; i < outputBuffer.length; i++) {
+      const sample1 = inputBuffer[i * 2];
+      const sample2 = i * 2 + 1 < inputBuffer.length ? inputBuffer[i * 2 + 1] : sample1;
+      outputBuffer[i] = Math.round((sample1 + sample2) / 2);
+    }
 
-  // Convert back to base64
-  const outputArray = new Uint8Array(outputBuffer.buffer);
-  let binaryString = "";
-  for (let i = 0; i < outputArray.length; i++) {
-    binaryString += String.fromCharCode(outputArray[i]);
+    // Convert to Uint8Array for base64 encoding
+    const outputBytes = new Uint8Array(outputBuffer.buffer);
+    
+    // Convert to base64
+    let binary = '';
+    for (let i = 0; i < outputBytes.length; i++) {
+      binary += String.fromCharCode(outputBytes[i]);
+    }
+    
+    return btoa(binary);
+  } catch (error) {
+    console.error("Error in convertAudioForExotel:", error);
+    throw error;
   }
-  return btoa(binaryString);
+}
+
+// Add this helper function to verify audio format
+function verifyAudioFormat(audioBase64: string, expectedSampleRate: number): boolean {
+  try {
+    const binaryData = atob(audioBase64);
+    const buffer = new Int16Array(binaryData.length / 2);
+    
+    // Basic validation - check if data length matches expected format
+    // For PCM 16-bit:
+    // - Each sample is 2 bytes
+    // - Expected length should be: duration * sampleRate * 2
+    const durationMs = 250; // assuming 250ms chunks
+    const expectedSamples = (durationMs / 1000) * expectedSampleRate;
+    const expectedBytes = expectedSamples * 2;
+    
+    const isValid = Math.abs(binaryData.length - expectedBytes) < expectedSampleRate; // Allow some flexibility
+    
+    if (!isValid) {
+      console.warn(`Audio format validation failed. Expected ~${expectedBytes} bytes, got ${binaryData.length}`);
+    }
+    
+    return isValid;
+  } catch (error) {
+    console.error("Error verifying audio format:", error);
+    return false;
+  }
 }
 
   // Split audio into appropriate chunk sizes

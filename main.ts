@@ -231,6 +231,11 @@ serve(async (req) => {
         const message = JSON.parse(event.data);
         
         if (message.event === "start") {
+          console.log(`New call starting with stream_sid: ${message.stream_sid}`);
+          if (activeConnections.has(message.stream_sid)) {
+              console.log(`Warning: Already have handler for stream_sid: ${message.stream_sid}`);
+              return;
+          }
           const handler = new CallHandler(message.stream_sid);
           handler.exotelWs = ws;
           activeConnections.set(message.stream_sid, handler);

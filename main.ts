@@ -206,7 +206,14 @@ serve(async (req) => {
     return response;
   }
 
-  return new Response("WebSocket server running");
-}, { port: 8000 });
+  return new Response(JSON.stringify({
+    status: "running",
+    websocket_endpoint: "wss://exotel-elevenlabs.deno.dev/stream",
+    message: "Use the WebSocket endpoint for bidirectional streaming"
+  }), {
+    headers: {
+      "content-type": "application/json"
+    }
+  }), { port: 8000 });
 
 console.log("Server running on :8000");

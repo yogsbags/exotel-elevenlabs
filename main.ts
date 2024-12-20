@@ -266,8 +266,7 @@ async convertAudioForExotel(audioBase64) {
   }
 }
 
-// Add this helper function to verify audio format
-function verifyAudioFormat(audioBase64: string, expectedSampleRate: number): boolean {
+function verifyAudioFormat(audioBase64, expectedSampleRate) {
   try {
     const binaryData = atob(audioBase64);
     const buffer = new Int16Array(binaryData.length / 2);

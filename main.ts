@@ -214,6 +214,6 @@ serve(async (req) => {
     headers: {
       "content-type": "application/json"
     }
-  }), { port: 8000 });
+  }), { port: 8000 };
 
 console.log("Server running on :8000");

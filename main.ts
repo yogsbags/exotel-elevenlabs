@@ -126,6 +126,9 @@ class CallHandler {
 
       case "stop":
         console.log("Stream ended:", this.streamSid);
+          if (this.exotelWs) {
+            this.exotelWs.close();
+          }
         this.cleanup();
         break;
     }

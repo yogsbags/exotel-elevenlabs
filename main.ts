@@ -131,17 +131,64 @@ class CallHandler {
     }
   }
 
-  // Convert 8kHz PCM to 16kHz PCM
-  async convertAudioForElevenLabs(audioBase64: string): Promise<string> {
-    // TODO: Implement audio upsampling from 8kHz to 16kHz
-    return audioBase64;
+async convertAudioForElevenLabs(audioBase64: string): Promise<string> {
+  // Decode base64 to buffer
+  const binaryData = atob(audioBase64);
+  const inputBuffer = new Int16Array(binaryData.length / 2);
+  
+  // Convert binary string to Int16Array
+  for (let i = 0; i < binaryData.length; i += 2) {
+    inputBuffer[i/2] = (binaryData.charCodeAt(i) | (binaryData.charCodeAt(i + 1) << 8));
   }
 
-  // Convert 16kHz PCM to 8kHz PCM
-  async convertAudioForExotel(audioBase64: string): Promise<string> {
-    // TODO: Implement audio downsampling from 16kHz to 8kHz
-    return audioBase64;
+  // Create output buffer (twice the size for upsampling)
+  const outputBuffer = new Int16Array(inputBuffer.length * 2);
+  
+  // Linear interpolation for upsampling
+  for (let i = 0; i < inputBuffer.length - 1; i++) {
+    outputBuffer[i * 2] = inputBuffer[i];
+    // Calculate intermediate sample
+    outputBuffer[i * 2 + 1] = Math.round((inputBuffer[i] + inputBuffer[i + 1]) / 2);
   }
+  // Handle last sample
+  outputBuffer[outputBuffer.length - 2] = inputBuffer[inputBuffer.length - 1];
+  outputBuffer[outputBuffer.length - 1] = inputBuffer[inputBuffer.length - 1];
+
+  // Convert back to base64
+  const outputArray = new Uint8Array(outputBuffer.buffer);
+  let binaryString = "";
+  for (let i = 0; i < outputArray.length; i++) {
+    binaryString += String.fromCharCode(outputArray[i]);
+  }
+  return btoa(binaryString);
+}
+
+async convertAudioForExotel(audioBase64: string): Promise<string> {
+  // Decode base64 to buffer
+  const binaryData = atob(audioBase64);
+  const inputBuffer = new Int16Array(binaryData.length / 2);
+  
+  // Convert binary string to Int16Array
+  for (let i = 0; i < binaryData.length; i += 2) {
+    inputBuffer[i/2] = (binaryData.charCodeAt(i) | (binaryData.charCodeAt(i + 1) << 8));
+  }
+
+  // Create output buffer (half the size for downsampling)
+  const outputBuffer = new Int16Array(Math.floor(inputBuffer.length / 2));
+  
+  // Average pairs of samples for downsampling
+  for (let i = 0; i < outputBuffer.length; i++) {
+    outputBuffer[i] = Math.round((inputBuffer[i * 2] + inputBuffer[i * 2 + 1]) / 2);
+  }
+
+  // Convert back to base64
+  const outputArray = new Uint8Array(outputBuffer.buffer);
+  let binaryString = "";
+  for (let i = 0; i < outputArray.length; i++) {
+    binaryString += String.fromCharCode(outputArray[i]);
+  }
+  return btoa(binaryString);
+}
 
   // Split audio into appropriate chunk sizes
   chunkAudio(audioBase64: string, chunkSize: number): string[] {

@@ -183,26 +183,32 @@ class CallHandler {
     }
   }
 
-async convertAudioForElevenLabs(audioBase64: string): Promise<string> {
-  // Decode base64 to buffer
-  const binaryData = atob(audioBase64);
-  const inputBuffer = new Int16Array(binaryData.length / 2);
-  
-  // Convert binary string to Int16Array
-  for (let i = 0; i < binaryData.length; i += 2) {
-    inputBuffer[i/2] = (binaryData.charCodeAt(i) | (binaryData.charCodeAt(i + 1) << 8));
-  }
+async convertAudioForElevenLabs(audioBase64) {
+  try {
+    // Decode base64 to buffer
+    const binaryData = atob(audioBase64);
+    const inputBuffer = new Int16Array(binaryData.length / 2);
+    
+    // Convert binary string to Int16Array (8kHz PCM)
+    for (let i = 0; i < binaryData.length; i += 2) {
+      inputBuffer[i/2] = (binaryData.charCodeAt(i) | (binaryData.charCodeAt(i + 1) << 8));
+    }
 
-  // Create output buffer (twice the size for upsampling)
-  const outputBuffer = new Int16Array(inputBuffer.length * 2);
-  
-  // Linear interpolation for upsampling
-  for (let i = 0; i < inputBuffer.length - 1; i++) {
-    outputBuffer[i * 2] = inputBuffer[i];
-    // Calculate intermediate sample
-    outputBuffer[i * 2 + 1] = Math.round((inputBuffer[i] + inputBuffer[i + 1]) / 2);
-  }
-  // Handle the last sample
+    // Create output buffer for 16kHz (double size for upsampling)
+    const outputBuffer = new Int16Array(inputBuffer.length * 2);
+    
+    // Linear interpolation for upsampling from 8kHz to 16kHz
+    for (let i = 0; i < inputBuffer.length - 1; i++) {
+      // Copy original sample
+      outputBuffer[i * 2] = inputBuffer[i];
+      
+      // Calculate interpolated sample between current and next sample
+      const currentSample = inputBuffer[i];
+      const nextSample = inputBuffer[i + 1];
+      outputBuffer[i * 2 + 1] = Math.round((currentSample + nextSample) / 2);
+    }
+    
+    // Handle the last sample
     const lastIndex = inputBuffer.length - 1;
     outputBuffer[lastIndex * 2] = inputBuffer[lastIndex];
     outputBuffer[lastIndex * 2 + 1] = inputBuffer[lastIndex];
@@ -223,7 +229,7 @@ async convertAudioForElevenLabs(audioBase64: string): Promise<string> {
   }
 }
 
-async convertAudioForExotel(audioBase64: string): Promise<string> {
+async convertAudioForExotel(audioBase64) {
   try {
     // Decode base64 to buffer
     const binaryData = atob(audioBase64);
